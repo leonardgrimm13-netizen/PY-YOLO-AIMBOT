@@ -8,34 +8,56 @@ from typing import Any, Iterable
 
 
 @dataclass
+class DetectionSample:
+    timestamp: float
+    center_x: float
+    center_y: float
+
+
+@dataclass
 class TrackState:
     track_id: int
-    history: deque[tuple[float, float, float]] = field(default_factory=lambda: deque(maxlen=8))
+    created_at: float
+    last_seen_at: float
+    history: deque[DetectionSample]
     velocity_x: float = 0.0
     velocity_y: float = 0.0
+    accel_x: float = 0.0
+    accel_y: float = 0.0
     box_width: float = 0.0
     box_height: float = 0.0
     last_conf: float = 0.0
     cls_id: int = -1
     label: str = ""
-    created_at: float = 0.0
-    last_seen_at: float = 0.0
     predicted_x: float = 0.0
     predicted_y: float = 0.0
+
+    def append_sample(self, timestamp: float, center_x: float, center_y: float):
+        self.history.append(DetectionSample(timestamp=timestamp, center_x=center_x, center_y=center_y))
+        self.last_seen_at = timestamp
+
+    @property
+    def latest(self) -> DetectionSample | None:
+        return self.history[-1] if self.history else None
 
 
 @dataclass
 class TargetTracker:
     selection_mode: str = "highest_confidence"
-    history_size: int = 8
-    max_prediction_age_ms: float = 250.0
-    reacquire_age_ms: float = 380.0
-    stale_after_ms: float = 120.0
-    base_gate_px: float = 40.0
-    gate_size_factor: float = 0.55
-    gate_velocity_factor: float = 0.075
-    switch_score_margin: float = 0.22
-    velocity_smoothing: float = 0.35
+    history_size: int = 10
+    max_prediction_age_ms: float = 320.0
+    stale_after_ms: float = 90.0
+    hold_after_miss_ms: float = 220.0
+    reacquire_age_ms: float = 420.0
+    base_gate_px: float = 34.0
+    gate_size_factor: float = 0.45
+    gate_velocity_factor: float = 0.045
+    gate_stale_factor: float = 0.10
+    box_smoothing: float = 0.28
+    velocity_smoothing: float = 0.38
+    acceleration_smoothing: float = 0.22
+    hysteresis_switch_margin: float = 0.25
+    max_prediction_dt_s: float = 0.45
 
     _state: TrackState | None = field(default=None, init=False)
     _next_track_id: int = field(default=1, init=False)
@@ -57,143 +79,171 @@ class TargetTracker:
             return self.get_active_target(now=now_ts)
 
         if self._state is None:
-            best = self._pick_initial_target(enriched)
-            self._start_new_track(best, now_ts)
+            self._start_track(self._pick_initial_target(enriched), now_ts)
             return self.get_active_target(now=now_ts)
 
         predicted_x, predicted_y = self._predict_center(now_ts)
-        matched = self._match_to_current_track(enriched, predicted_x, predicted_y)
+        matched = self._match_to_track(enriched, predicted_x, predicted_y, now_ts)
 
-        if matched is None:
-            candidate = self._pick_initial_target(enriched)
-            if self._should_switch_target(candidate, predicted_x, predicted_y, now_ts):
-                self._start_new_track(candidate, now_ts)
+        if matched is not None:
+            self._update_track_from_detection(matched, now_ts)
             return self.get_active_target(now=now_ts)
 
-        self._update_track(matched, now_ts)
+        candidate = self._pick_initial_target(enriched)
+        if self._should_switch_track(candidate, predicted_x, predicted_y, now_ts):
+            self._start_track(candidate, now_ts)
+
         return self.get_active_target(now=now_ts)
 
     def get_active_target(self, now: float | None = None) -> dict[str, Any] | None:
-        if self._state is None:
+        state = self._state
+        if state is None:
             return None
 
         now_ts = time.perf_counter() if now is None else now
-        stale_ms = (now_ts - self._state.last_seen_at) * 1000.0
-        age_ms = (now_ts - self._state.created_at) * 1000.0
+        stale_ms = (now_ts - state.last_seen_at) * 1000.0
 
         if stale_ms > self.max_prediction_age_ms:
             self._state = None
             return None
 
-        pred_x, pred_y = self._predict_center(now_ts)
-        self._state.predicted_x = pred_x
-        self._state.predicted_y = pred_y
+        predicted_x, predicted_y = self._predict_center(now_ts)
+        state.predicted_x = predicted_x
+        state.predicted_y = predicted_y
 
-        half_w = max(4.0, self._state.box_width / 2.0)
-        half_h = max(4.0, self._state.box_height / 2.0)
+        half_w = max(5.0, state.box_width * 0.5)
+        half_h = max(5.0, state.box_height * 0.5)
+        age_ms = (now_ts - state.created_at) * 1000.0
 
-        target = {
-            "x1": int(round(pred_x - half_w)),
-            "y1": int(round(pred_y - half_h)),
-            "x2": int(round(pred_x + half_w)),
-            "y2": int(round(pred_y + half_h)),
-            "center_x": pred_x,
-            "center_y": pred_y,
-            "conf": self._state.last_conf,
-            "cls_id": self._state.cls_id,
-            "label": self._state.label,
-            "predicted": stale_ms > 1.0,
-            "track_id": self._state.track_id,
-            "velocity_x": self._state.velocity_x,
-            "velocity_y": self._state.velocity_y,
+        return {
+            "x1": int(round(predicted_x - half_w)),
+            "y1": int(round(predicted_y - half_h)),
+            "x2": int(round(predicted_x + half_w)),
+            "y2": int(round(predicted_y + half_h)),
+            "center_x": predicted_x,
+            "center_y": predicted_y,
+            "raw_center_x": state.latest.center_x if state.latest else predicted_x,
+            "raw_center_y": state.latest.center_y if state.latest else predicted_y,
+            "conf": state.last_conf,
+            "cls_id": state.cls_id,
+            "label": state.label,
+            "track_id": state.track_id,
+            "velocity_x": state.velocity_x,
+            "velocity_y": state.velocity_y,
+            "accel_x": state.accel_x,
+            "accel_y": state.accel_y,
             "age_ms": age_ms,
             "stale_ms": stale_ms,
-            "prediction_ms": max(0.0, stale_ms),
+            "predicted": stale_ms > self.stale_after_ms,
+            "fresh": stale_ms <= self.stale_after_ms,
+            "prediction_ms": stale_ms,
         }
-        return target
 
-    def _start_new_track(self, det: dict[str, Any], now_ts: float):
-        state = TrackState(track_id=self._next_track_id)
+    def _start_track(self, det: dict[str, Any], now_ts: float):
+        history: deque[DetectionSample] = deque(maxlen=self.history_size)
+        history.append(DetectionSample(timestamp=now_ts, center_x=det["center_x"], center_y=det["center_y"]))
+        self._state = TrackState(
+            track_id=self._next_track_id,
+            created_at=now_ts,
+            last_seen_at=now_ts,
+            history=history,
+            box_width=det["box_width"],
+            box_height=det["box_height"],
+            last_conf=det["conf"],
+            cls_id=int(det["cls_id"]),
+            label=str(det.get("label", "")),
+            predicted_x=det["center_x"],
+            predicted_y=det["center_y"],
+        )
         self._next_track_id += 1
-        state.history = deque(maxlen=self.history_size)
-        state.created_at = now_ts
-        state.last_seen_at = now_ts
-        state.box_width = det["box_width"]
-        state.box_height = det["box_height"]
-        state.last_conf = det["conf"]
-        state.cls_id = int(det["cls_id"])
-        state.label = str(det.get("label", ""))
-        state.predicted_x = det["center_x"]
-        state.predicted_y = det["center_y"]
-        state.history.append((now_ts, det["center_x"], det["center_y"]))
-        self._state = state
 
-    def _update_track(self, det: dict[str, Any], now_ts: float):
+    def _update_track_from_detection(self, det: dict[str, Any], now_ts: float):
         state = self._state
         if state is None:
             return
 
-        previous = state.history[-1] if state.history else None
-        state.history.append((now_ts, det["center_x"], det["center_y"]))
-        state.last_seen_at = now_ts
-        state.box_width = (state.box_width * 0.7) + (det["box_width"] * 0.3)
-        state.box_height = (state.box_height * 0.7) + (det["box_height"] * 0.3)
-        state.last_conf = det["conf"]
+        previous_velocity_x = state.velocity_x
+        previous_velocity_y = state.velocity_y
+        previous = state.latest
+
+        state.append_sample(now_ts, det["center_x"], det["center_y"])
+        state.box_width = (1.0 - self.box_smoothing) * state.box_width + self.box_smoothing * det["box_width"]
+        state.box_height = (1.0 - self.box_smoothing) * state.box_height + self.box_smoothing * det["box_height"]
+        state.last_conf = float(det["conf"])
         state.cls_id = int(det["cls_id"])
         state.label = str(det.get("label", ""))
 
         if previous is not None:
-            dt = max(1e-3, now_ts - previous[0])
-            vx = (det["center_x"] - previous[1]) / dt
-            vy = (det["center_y"] - previous[2]) / dt
-            state.velocity_x = (state.velocity_x * (1.0 - self.velocity_smoothing)) + (
-                vx * self.velocity_smoothing
-            )
-            state.velocity_y = (state.velocity_y * (1.0 - self.velocity_smoothing)) + (
-                vy * self.velocity_smoothing
-            )
+            dt = max(1e-3, now_ts - previous.timestamp)
+            raw_vx = (det["center_x"] - previous.center_x) / dt
+            raw_vy = (det["center_y"] - previous.center_y) / dt
+
+            state.velocity_x = (1.0 - self.velocity_smoothing) * state.velocity_x + self.velocity_smoothing * raw_vx
+            state.velocity_y = (1.0 - self.velocity_smoothing) * state.velocity_y + self.velocity_smoothing * raw_vy
+
+            raw_ax = (state.velocity_x - previous_velocity_x) / dt
+            raw_ay = (state.velocity_y - previous_velocity_y) / dt
+            state.accel_x = (1.0 - self.acceleration_smoothing) * state.accel_x + self.acceleration_smoothing * raw_ax
+            state.accel_y = (1.0 - self.acceleration_smoothing) * state.accel_y + self.acceleration_smoothing * raw_ay
 
         state.predicted_x = det["center_x"]
         state.predicted_y = det["center_y"]
 
     def _predict_center(self, now_ts: float) -> tuple[float, float]:
         state = self._state
-        if state is None or not state.history:
+        if state is None:
             return 0.0, 0.0
 
-        _, last_x, last_y = state.history[-1]
-        dt = max(0.0, now_ts - state.last_seen_at)
-        return (last_x + state.velocity_x * dt, last_y + state.velocity_y * dt)
+        latest = state.latest
+        if latest is None:
+            return state.predicted_x, state.predicted_y
 
-    def _match_to_current_track(
+        dt = max(0.0, min(self.max_prediction_dt_s, now_ts - state.last_seen_at))
+        predicted_x = latest.center_x + state.velocity_x * dt + 0.5 * state.accel_x * dt * dt
+        predicted_y = latest.center_y + state.velocity_y * dt + 0.5 * state.accel_y * dt * dt
+        return predicted_x, predicted_y
+
+    def _match_to_track(
         self,
         detections: list[dict[str, Any]],
         predicted_x: float,
         predicted_y: float,
+        now_ts: float,
     ) -> dict[str, Any] | None:
         state = self._state
         if state is None:
             return None
 
-        speed = hypot(state.velocity_x, state.velocity_y)
-        gate = self.base_gate_px
-        gate += max(state.box_width, state.box_height) * self.gate_size_factor
-        gate += speed * self.gate_velocity_factor
+        stale_ms = (now_ts - state.last_seen_at) * 1000.0
+        gate = self._compute_gate_radius(state=state, stale_ms=stale_ms)
 
-        in_gate = []
+        scored: list[tuple[float, dict[str, Any]]] = []
         for det in detections:
             distance = hypot(det["center_x"] - predicted_x, det["center_y"] - predicted_y)
-            if distance <= gate:
-                score = distance - (det["conf"] * 22.0)
-                in_gate.append((score, det))
+            if distance > gate:
+                continue
+            distance_score = distance / max(1.0, gate)
+            conf_score = 1.0 - float(det["conf"])
+            center_bias = det["distance_to_screen_center"] / max(120.0, gate * 4.0)
+            score = (distance_score * 0.62) + (conf_score * 0.28) + (center_bias * 0.10)
+            scored.append((score, det))
 
-        if not in_gate:
+        if not scored:
             return None
 
-        in_gate.sort(key=lambda item: item[0])
-        return in_gate[0][1]
+        scored.sort(key=lambda item: item[0])
+        return scored[0][1]
 
-    def _should_switch_target(
+    def _compute_gate_radius(self, state: TrackState, stale_ms: float) -> float:
+        speed = hypot(state.velocity_x, state.velocity_y)
+        box_scale = max(state.box_width, state.box_height)
+        gate = self.base_gate_px
+        gate += box_scale * self.gate_size_factor
+        gate += speed * self.gate_velocity_factor
+        gate += max(0.0, stale_ms) * self.gate_stale_factor
+        return max(24.0, gate)
+
+    def _should_switch_track(
         self,
         candidate: dict[str, Any],
         predicted_x: float,
@@ -205,16 +255,17 @@ class TargetTracker:
             return True
 
         stale_ms = (now_ts - state.last_seen_at) * 1000.0
-        candidate_distance = hypot(candidate["center_x"] - predicted_x, candidate["center_y"] - predicted_y)
-
         if stale_ms >= self.reacquire_age_ms:
             return True
 
-        track_score = (stale_ms * 0.004) + (1.0 - min(1.0, state.last_conf))
-        candidate_score = (candidate_distance / max(20.0, max(state.box_width, state.box_height))) + (
-            1.0 - candidate["conf"]
-        )
-        return candidate_score + self.switch_score_margin < track_score
+        if stale_ms <= self.hold_after_miss_ms:
+            return False
+
+        candidate_distance = hypot(candidate["center_x"] - predicted_x, candidate["center_y"] - predicted_y)
+        scale = max(24.0, max(state.box_width, state.box_height))
+        candidate_score = (candidate_distance / scale) + (1.0 - float(candidate["conf"]))
+        keep_score = (stale_ms / max(1.0, self.max_prediction_age_ms)) + (1.0 - state.last_conf)
+        return candidate_score + self.hysteresis_switch_margin < keep_score
 
     def _pick_initial_target(self, detections: list[dict[str, Any]]) -> dict[str, Any]:
         if self.selection_mode == "nearest_center":
@@ -246,8 +297,5 @@ class TargetTracker:
             "box_width": max(0, x2 - x1),
             "box_height": max(0, y2 - y1),
             "distance_to_roi_center": hypot(center_x - roi_center[0], center_y - roi_center[1]),
-            "distance_to_screen_center": hypot(
-                center_x - screen_center[0],
-                center_y - screen_center[1],
-            ),
+            "distance_to_screen_center": hypot(center_x - screen_center[0], center_y - screen_center[1]),
         }

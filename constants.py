@@ -5,8 +5,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 MODEL_PATH = SCRIPT_DIR / "model.pt"
 
 # Feste Laufzeitparameter
-TARGET_FPS = 15
-DETECT_FPS = 10.0
+TARGET_FPS = 60
+DETECT_FPS = 18.0
 CONF = 0.45
 IOU = 0.50
 # Robustere Strategie: Modell darf mehrere Kandidaten liefern, Tracker reduziert sauber auf genau 1 aktives Ziel.
