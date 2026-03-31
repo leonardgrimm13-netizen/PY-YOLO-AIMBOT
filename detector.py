@@ -8,7 +8,6 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from config import AppSettings
 from constants import CONF, IOU, MAX_DET, SHOW_LABELS
-from target_tracker import TargetTracker
 
 
 class DetectorWorker(QObject):
@@ -26,7 +25,6 @@ class DetectorWorker(QObject):
         self.names: Any = None
         self.sct = None
         self.fallback_done = False
-        self.target_tracker = TargetTracker(selection_mode=settings.target_selection_mode)
         self._last_status_log = 0.0
         self._last_status_key: tuple[Any, ...] | None = None
 
@@ -110,34 +108,15 @@ class DetectorWorker(QObject):
 
         return out
 
-    def _select_active_target(self, detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        target = self.target_tracker.select_best_target(
-            detections=detections,
-            roi_center=self.settings.roi_center,
-            screen_center=self.settings.screen_center,
-        )
-        if target is None:
-            return []
-        return [target]
-
-    def _emit_target_status(self, active_target: list[dict[str, Any]]):
+    def _emit_target_status(self, detections: list[dict[str, Any]]):
         now = time.perf_counter()
-        if active_target:
-            det = active_target[0]
-            status_key: tuple[Any, ...] = (
-                True,
-                round(det["center_x"], 1),
-                round(det["center_y"], 1),
-                round(det["conf"], 2),
-            )
-            text = (
-                f"Aktives Ziel: ja | Regel={self.settings.target_mode_name} | "
-                f"Center=({det['center_x']:.1f}, {det['center_y']:.1f}) | "
-                f"Conf={det['conf']:.2f}"
-            )
-        else:
-            status_key = (False,)
-            text = f"Aktives Ziel: nein | Regel={self.settings.target_mode_name}"
+        count = len(detections)
+        top_conf = max((det.get("conf", 0.0) for det in detections), default=0.0)
+        status_key: tuple[Any, ...] = (count, round(top_conf, 2))
+        text = (
+            f"Detections: {count} | Regel={self.settings.target_mode_name} | "
+            f"Top-Conf={top_conf:.2f}"
+        )
 
         should_log = status_key != self._last_status_key or (now - self._last_status_log) >= 1.0
         if should_log:
@@ -157,9 +136,8 @@ class DetectorWorker(QObject):
             self._ensure_ready()
             frame = self._grab_frame()
             detections = self._parse_results(self._predict_once(frame))
-            active_target = self._select_active_target(detections)
-            self.detections_ready.emit(active_target)
-            self._emit_target_status(active_target)
+            self.detections_ready.emit(detections)
+            self._emit_target_status(detections)
         except Exception as exc:  # noqa: BLE001
             if (not self.fallback_done) and self.settings.device_string != "cpu":
                 self.fallback_done = True
@@ -175,9 +153,8 @@ class DetectorWorker(QObject):
                     self._ensure_ready()
                     frame = self._grab_frame()
                     detections = self._parse_results(self._predict_once(frame))
-                    active_target = self._select_active_target(detections)
-                    self.detections_ready.emit(active_target)
-                    self._emit_target_status(active_target)
+                    self.detections_ready.emit(detections)
+                    self._emit_target_status(detections)
                 except Exception as second_exc:  # noqa: BLE001
                     self.log_ready.emit(f"Erkennungsfehler nach CPU-Fallback: {second_exc}")
             else:
