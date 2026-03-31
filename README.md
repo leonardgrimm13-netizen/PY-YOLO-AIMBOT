@@ -17,7 +17,6 @@ pip install -r requirements.txt
 
 ## Start
 ```powershell
-python 1.py
 python start.py
 ```
 (Alternativ: `python main.py`)
