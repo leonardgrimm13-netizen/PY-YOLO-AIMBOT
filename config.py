@@ -15,6 +15,8 @@ class AppSettings:
     imgsz: int
     team_name: str
     team_classes: Optional[list[int]]
+    target_mode_name: str
+    target_selection_mode: str
     device_name: str
     device_string: str
     use_half: bool
@@ -25,6 +27,20 @@ class AppSettings:
     capture_region: dict
     offset_x: int
     offset_y: int
+
+    @property
+    def roi_center(self) -> tuple[float, float]:
+        return (
+            self.capture_region["left"] + (self.capture_region["width"] / 2.0),
+            self.capture_region["top"] + (self.capture_region["height"] / 2.0),
+        )
+
+    @property
+    def screen_center(self) -> tuple[float, float]:
+        return (
+            self.screen_left + (self.screen_width / 2.0),
+            self.screen_top + (self.screen_height / 2.0),
+        )
 
 
 def quality_to_imgsz(name: str) -> int:

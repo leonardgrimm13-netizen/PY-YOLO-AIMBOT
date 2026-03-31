@@ -27,6 +27,7 @@ from constants import (
     QUALITY_TO_IMGSZ,
     SHOW_FPS,
     TARGET_FPS,
+    TARGET_SELECTION_MODES,
     TEAM_TO_CLASSES,
 )
 from detector import DetectorWorker
@@ -85,6 +86,9 @@ class OverlayWindow(QWidget):
         self.log_callback(f"Modell: {self.settings.model_path}")
         self.log_callback(f"Qualität: {self.settings.quality_name} ({self.settings.imgsz})")
         self.log_callback(f"Team: {self.settings.team_name} -> Klassen {self.settings.team_classes}")
+        self.log_callback(
+            f"Zielauswahl: {self.settings.target_mode_name} ({self.settings.target_selection_mode})"
+        )
         self.log_callback(f"Gerät: {self.settings.device_name} ({self.settings.device_string})")
         self.log_callback(f"ROI aktiv und mittig: {self.settings.capture_region}")
 
@@ -135,6 +139,23 @@ class OverlayWindow(QWidget):
             painter.setPen(pen)
             x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
             painter.drawRect(QRect(x1, y1, x2 - x1, y2 - y1))
+            center_x = int(det["center_x"])
+            center_y = int(det["center_y"])
+
+            screen_pen = QPen(QColor(255, 255, 255, 180))
+            screen_pen.setWidth(max(1, LINE_WIDTH - 1))
+            painter.setPen(screen_pen)
+            painter.drawLine(
+                int(self.settings.screen_center[0]),
+                int(self.settings.screen_center[1]),
+                center_x,
+                center_y,
+            )
+
+            painter.setPen(pen)
+            painter.drawEllipse(center_x - 4, center_y - 4, 8, 8)
+            painter.drawLine(center_x - 8, center_y, center_x + 8, center_y)
+            painter.drawLine(center_x, center_y - 8, center_x, center_y + 8)
 
             label = det.get("label", "")
             if label:
@@ -196,6 +217,7 @@ class MainWindow(QMainWindow):
         self.screen_combo = QComboBox()
         self.quality_combo = QComboBox()
         self.team_combo = QComboBox()
+        self.target_mode_combo = QComboBox()
         self.device_combo = QComboBox()
 
         self.fill_screens()
@@ -203,6 +225,8 @@ class MainWindow(QMainWindow):
         self.quality_combo.setCurrentText("Standard")
         self.team_combo.addItems(list(TEAM_TO_CLASSES.keys()))
         self.team_combo.setCurrentText("Beide")
+        self.target_mode_combo.addItems(list(TARGET_SELECTION_MODES.keys()))
+        self.target_mode_combo.setCurrentText("Höchste Konfidenz")
 
         self.refresh_btn = QPushButton("Geräte neu prüfen")
         self.refresh_btn.clicked.connect(self.refresh_devices)
@@ -213,6 +237,8 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.quality_combo)
         settings_layout.addWidget(QLabel("Team"))
         settings_layout.addWidget(self.team_combo)
+        settings_layout.addWidget(QLabel("Zielauswahl"))
+        settings_layout.addWidget(self.target_mode_combo)
         settings_layout.addWidget(QLabel("Gerät"))
         settings_layout.addWidget(self.device_combo)
         settings_layout.addWidget(self.refresh_btn)
@@ -288,6 +314,7 @@ class MainWindow(QMainWindow):
 
         quality_name = self.quality_combo.currentText()
         team_name = self.team_combo.currentText()
+        target_mode_name = self.target_mode_combo.currentText()
         selected_info = self.device_combo.currentData()
 
         auto_resolved = False
@@ -308,6 +335,8 @@ class MainWindow(QMainWindow):
             imgsz=quality_to_imgsz(quality_name),
             team_name=team_name,
             team_classes=team_to_classes(team_name),
+            target_mode_name=target_mode_name,
+            target_selection_mode=TARGET_SELECTION_MODES[target_mode_name],
             device_name=selected_info["name"],
             device_string=selected_info["device"],
             use_half=should_use_half(selected_info["device"]),

@@ -6,10 +6,11 @@ MODEL_PATH = SCRIPT_DIR / "model.pt"
 
 # Feste Laufzeitparameter
 TARGET_FPS = 15
-DETECT_FPS = 4.0
+DETECT_FPS = 10.0
 CONF = 0.45
 IOU = 0.50
-MAX_DET = 5
+# Robustere Strategie: Modell darf mehrere Kandidaten liefern, Tracker reduziert sauber auf genau 1 aktives Ziel.
+MAX_DET = 10
 
 SHOW_LABELS = True
 SHOW_FPS = False
@@ -30,4 +31,9 @@ TEAM_TO_CLASSES = {
     "Beide": None,
     "Orange": [0],
     "Blau": [1],
+}
+
+TARGET_SELECTION_MODES = {
+    "Höchste Konfidenz": "highest_confidence",
+    "Nächste zur Mitte": "nearest_center",
 }
