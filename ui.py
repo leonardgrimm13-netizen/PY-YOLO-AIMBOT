@@ -77,6 +77,7 @@ class OverlayWindow(QWidget):
         self.detector_thread.start()
 
         self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.timer.timeout.connect(self.tick)
         self.timer.start(int(1000 / TARGET_FPS))
 
@@ -113,13 +114,15 @@ class OverlayWindow(QWidget):
 
     @Slot(list, dict)
     def on_detections_ready(self, detections, meta):
-        now = time.perf_counter()
+        now_ts = time.perf_counter()
         self.last_detection_meta = meta
         self.target_tracker.update_detections(
             detections=detections,
             roi_center=self.settings.roi_center,
             screen_center=self.settings.screen_center,
-            now=now,
+            captured_at=float(meta.get("captured_at", now_ts)),
+            detected_at=float(meta.get("detected_at", now_ts)),
+            now=now_ts,
         )
 
     def color_for_class(self, cls_id: int) -> QColor:
@@ -144,10 +147,12 @@ class OverlayWindow(QWidget):
             pen = QPen(self.color_for_class(det["cls_id"]))
             pen.setWidth(LINE_WIDTH)
             painter.setPen(pen)
-            x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
+            x1, y1, x2, y2 = int(det["x1"]), int(det["y1"]), int(det["x2"]), int(det["y2"])
             painter.drawRect(QRect(x1, y1, x2 - x1, y2 - y1))
-            center_x = int(det["center_x"])
-            center_y = int(det["center_y"])
+            center_x = int(det["bbox_center_x"])
+            center_y = int(det["bbox_center_y"])
+            aim_x = int(det.get("aim_x", center_x))
+            aim_y = int(det.get("aim_y", center_y))
 
             screen_pen = QPen(QColor(255, 255, 255, 180))
             screen_pen.setWidth(max(1, LINE_WIDTH - 1))
@@ -155,14 +160,15 @@ class OverlayWindow(QWidget):
             painter.drawLine(
                 int(self.settings.screen_center[0]),
                 int(self.settings.screen_center[1]),
-                center_x,
-                center_y,
+                aim_x,
+                aim_y,
             )
 
             painter.setPen(pen)
-            painter.drawEllipse(center_x - 4, center_y - 4, 8, 8)
-            painter.drawLine(center_x - 8, center_y, center_x + 8, center_y)
-            painter.drawLine(center_x, center_y - 8, center_x, center_y + 8)
+            painter.drawEllipse(center_x - 3, center_y - 3, 6, 6)
+            painter.drawEllipse(aim_x - 4, aim_y - 4, 8, 8)
+            painter.drawLine(aim_x - 8, aim_y, aim_x + 8, aim_y)
+            painter.drawLine(aim_x, aim_y - 8, aim_x, aim_y + 8)
 
             label = det.get("label", "")
             if label:
@@ -176,7 +182,7 @@ class OverlayWindow(QWidget):
                 painter.drawText(label_x + 5, label_y + text_h - 6, label)
 
         if SHOW_FPS:
-            painter.fillRect(10, 10, 130, 28, QColor(0, 0, 0, 180))
+            painter.fillRect(10, 10, 160, 28, QColor(0, 0, 0, 180))
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(18, 30, f"Overlay FPS: {self.overlay_fps:.1f}")
 

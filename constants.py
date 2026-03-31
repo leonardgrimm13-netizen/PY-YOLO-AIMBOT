@@ -21,6 +21,10 @@ FONT_SIZE = 12
 ROI_WIDTH = 1280
 ROI_HEIGHT = 720
 
+# Interner Zielpunkt innerhalb der Box (0.0 = links/oben, 1.0 = rechts/unten)
+AIM_ANCHOR_X_RATIO = 0.50
+AIM_ANCHOR_Y_RATIO = 0.43
+
 QUALITY_TO_IMGSZ = {
     "Schnell": 640,
     "Standard": 960,

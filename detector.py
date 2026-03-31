@@ -39,6 +39,8 @@ class DetectorWorker(QObject):
 
         self._last_status_log = 0.0
         self._last_status_key: tuple[Any, ...] | None = None
+        self._last_emit_time = 0.0
+        self._smoothed_det_hz = 0.0
 
     def _ensure_ready(self):
         if self.sct is None:
@@ -129,14 +131,32 @@ class DetectorWorker(QObject):
             )
         return out
 
+    def _update_detection_frequency(self, emit_ts: float):
+        if self._last_emit_time > 0.0:
+            dt = max(1e-3, emit_ts - self._last_emit_time)
+            hz = 1.0 / dt
+            if self._smoothed_det_hz <= 0.0:
+                self._smoothed_det_hz = hz
+            else:
+                self._smoothed_det_hz = (0.80 * self._smoothed_det_hz) + (0.20 * hz)
+        self._last_emit_time = emit_ts
+
     def _emit_target_status(self, detections: list[dict[str, Any]], latency_ms: float, infer_ms: float):
         now = time.perf_counter()
         count = len(detections)
         top_conf = max((det.get("conf", 0.0) for det in detections), default=0.0)
-        status_key: tuple[Any, ...] = (count, round(top_conf, 2), int(latency_ms // 10), int(infer_ms // 10))
+        hz = self._smoothed_det_hz
+        status_key: tuple[Any, ...] = (
+            count,
+            round(top_conf, 2),
+            int(latency_ms // 10),
+            int(infer_ms // 10),
+            int(hz),
+        )
         text = (
             f"Detections: {count} | Regel={self.settings.target_mode_name} | "
-            f"Top-Conf={top_conf:.2f} | Inference={infer_ms:.1f} ms | E2E={latency_ms:.1f} ms"
+            f"Top-Conf={top_conf:.2f} | Inference={infer_ms:.1f} ms | E2E={latency_ms:.1f} ms | "
+            f"Det-Hz={hz:.1f}"
         )
 
         should_log = status_key != self._last_status_key or (now - self._last_status_log) >= 1.0
@@ -194,11 +214,14 @@ class DetectorWorker(QObject):
                 now_done = time.perf_counter()
                 infer_ms = (now_done - inference_start) * 1000.0
                 latency_ms = (now_done - packet.captured_at) * 1000.0
+                self._update_detection_frequency(now_done)
+
                 meta = {
                     "captured_at": packet.captured_at,
                     "detected_at": now_done,
                     "inference_ms": infer_ms,
                     "latency_ms": latency_ms,
+                    "detection_hz": self._smoothed_det_hz,
                 }
                 self.detections_ready.emit(detections, meta)
                 self._emit_target_status(detections=detections, latency_ms=latency_ms, infer_ms=infer_ms)
