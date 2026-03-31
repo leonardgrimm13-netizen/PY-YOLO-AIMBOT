@@ -33,6 +33,7 @@ from constants import (
 from detector import DetectorWorker
 from aim import AimController
 from devices import DeviceInfo, list_available_devices, resolve_auto_device, should_use_half
+from target_tracker import TargetTracker
 
 
 class OverlayWindow(QWidget):
@@ -50,6 +51,8 @@ class OverlayWindow(QWidget):
         self.detect_interval = 1.0 / max(0.1, DETECT_FPS)
         self.detector_busy = False
         self.aim_controller = AimController()
+        self.target_tracker = TargetTracker(selection_mode=settings.target_selection_mode)
+        self.active_target = None
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -107,19 +110,25 @@ class OverlayWindow(QWidget):
             self.detector_busy = True
             self.request_detect.emit()
 
+        self.active_target = self.target_tracker.get_active_target(now=now)
+        if self.active_target is not None:
+            self.aim_controller.aim_target(self.active_target, self.settings.screen_center, now=now)
+            self.detections = [self.active_target]
+        else:
+            self.detections = []
+
         self.update()
 
     @Slot(list)
     def on_detections_ready(self, detections):
-        self.detections = detections
-        if not detections:
-            return
-
-        target = detections[0]
-        self.aim_controller.aim_to_screen_center(
-            target_center=(target["center_x"], target["center_y"]),
+        now = time.perf_counter()
+        self.active_target = self.target_tracker.update_detections(
+            detections=detections,
+            roi_center=self.settings.roi_center,
             screen_center=self.settings.screen_center,
+            now=now,
         )
+        self.detections = [self.active_target] if self.active_target is not None else []
 
     @Slot()
     def on_detector_finished(self):
