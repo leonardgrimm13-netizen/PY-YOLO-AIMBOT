@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
 from config import AppSettings, make_center_roi, quality_to_imgsz, team_to_classes, validate_model_path
 from constants import (
     APP_TITLE,
-    DETECT_FPS,
     FONT_SIZE,
     LINE_WIDTH,
     MODEL_PATH,
@@ -37,7 +36,7 @@ from target_tracker import TargetTracker
 
 
 class OverlayWindow(QWidget):
-    request_detect = Signal()
+    request_stop_detect = Signal()
 
     def __init__(self, settings: AppSettings, log_callback, yolo_cls, mss_mod):
         super().__init__()
@@ -47,9 +46,7 @@ class OverlayWindow(QWidget):
         self.detections = []
         self.overlay_fps = 0.0
         self.last_paint = time.perf_counter()
-        self.last_detect_request = 0.0
-        self.detect_interval = 1.0 / max(0.1, DETECT_FPS)
-        self.detector_busy = False
+        self.last_detection_meta = None
         self.aim_controller = AimController()
         self.target_tracker = TargetTracker(selection_mode=settings.target_selection_mode)
         self.active_target = None
@@ -73,10 +70,10 @@ class OverlayWindow(QWidget):
         self.detector_thread = QThread()
         self.detector = DetectorWorker(settings, yolo_cls=yolo_cls, mss_mod=mss_mod)
         self.detector.moveToThread(self.detector_thread)
-        self.request_detect.connect(self.detector.detect_once)
+        self.detector_thread.started.connect(self.detector.run_loop)
+        self.request_stop_detect.connect(self.detector.stop)
         self.detector.detections_ready.connect(self.on_detections_ready)
         self.detector.log_ready.connect(self.log_callback)
-        self.detector.finished_one.connect(self.on_detector_finished)
         self.detector_thread.start()
 
         self.timer = QTimer(self)
@@ -105,11 +102,6 @@ class OverlayWindow(QWidget):
         if dt > 0:
             self.overlay_fps = 1.0 / dt
 
-        if (now - self.last_detect_request) >= self.detect_interval and not self.detector_busy:
-            self.last_detect_request = now
-            self.detector_busy = True
-            self.request_detect.emit()
-
         self.active_target = self.target_tracker.get_active_target(now=now)
         if self.active_target is not None:
             self.aim_controller.aim_target(self.active_target, self.settings.screen_center, now=now)
@@ -119,20 +111,16 @@ class OverlayWindow(QWidget):
 
         self.update()
 
-    @Slot(list)
-    def on_detections_ready(self, detections):
+    @Slot(list, dict)
+    def on_detections_ready(self, detections, meta):
         now = time.perf_counter()
-        self.active_target = self.target_tracker.update_detections(
+        self.last_detection_meta = meta
+        self.target_tracker.update_detections(
             detections=detections,
             roi_center=self.settings.roi_center,
             screen_center=self.settings.screen_center,
             now=now,
         )
-        self.detections = [self.active_target] if self.active_target is not None else []
-
-    @Slot()
-    def on_detector_finished(self):
-        self.detector_busy = False
 
     def color_for_class(self, cls_id: int) -> QColor:
         palette = [
@@ -196,6 +184,7 @@ class OverlayWindow(QWidget):
 
     def stop_overlay(self):
         self.timer.stop()
+        self.request_stop_detect.emit()
         self.detector_thread.quit()
         if not self.detector_thread.wait(3000):
             self.log_callback("Warnung: Detector-Thread reagiert nicht rechtzeitig beim Stoppen.")
@@ -204,6 +193,7 @@ class OverlayWindow(QWidget):
     def closeEvent(self, event):  # noqa: N802
         try:
             self.timer.stop()
+            self.request_stop_detect.emit()
             self.detector_thread.quit()
             self.detector_thread.wait(3000)
         except Exception:

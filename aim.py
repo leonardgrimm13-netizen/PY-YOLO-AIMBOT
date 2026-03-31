@@ -17,21 +17,24 @@ class AimState:
 
 @dataclass
 class AimController:
-    """Steuert die Maus relativ, um ein Ziel in die Bildschirmmitte zu ziehen."""
+    """Steuert die Maus relativ, um ein Ziel weich in die Bildschirmmitte zu führen."""
 
-    kp_fresh: float = 0.038
-    kd_fresh: float = 0.020
-    kp_predicted: float = 0.024
-    kd_predicted: float = 0.010
-    deadzone_px: float = 2.5
-    stop_stale_ms: float = 300.0
-    caution_stale_ms: float = 110.0
-    near_damping_radius_px: float = 120.0
-    max_speed_px_s: float = 1400.0
-    max_accel_px_s2: float = 5200.0
-    max_step_px: int = 55
-    micro_step_threshold: float = 0.35
-    derivative_clip: float = 1800.0
+    kp_fresh: float = 0.032
+    kd_fresh: float = 0.013
+    kp_predicted: float = 0.020
+    kd_predicted: float = 0.008
+    velocity_lead_gain: float = 0.018
+    deadzone_px: float = 2.0
+    soft_zone_px: float = 7.0
+    near_damping_radius_px: float = 115.0
+    caution_stale_ms: float = 115.0
+    stop_stale_ms: float = 320.0
+    max_speed_px_s_fresh: float = 1280.0
+    max_speed_px_s_predicted: float = 820.0
+    max_accel_px_s2: float = 4200.0
+    max_step_px: int = 42
+    derivative_clip: float = 1400.0
+    micro_step_threshold: float = 0.34
 
     _state: AimState = field(default_factory=AimState, init=False)
 
@@ -40,45 +43,47 @@ class AimController:
 
     def aim_target(self, target: dict, screen_center: tuple[float, float], now: float | None = None) -> bool:
         if not self._is_windows or target is None:
-            self._reset_if_idle(now)
+            self._reset(now)
             return False
 
         now_ts = time.perf_counter() if now is None else now
         stale_ms = float(target.get("stale_ms", 0.0))
         if stale_ms >= self.stop_stale_ms:
-            self._reset_if_idle(now_ts)
+            self._reset(now_ts)
             return False
 
-        error_x = float(target["center_x"]) - screen_center[0]
-        error_y = float(target["center_y"]) - screen_center[1]
+        predicted = bool(target.get("predicted", False))
+        max_speed = self.max_speed_px_s_predicted if predicted else self.max_speed_px_s_fresh
+        kp = self.kp_predicted if predicted else self.kp_fresh
+        kd = self.kd_predicted if predicted else self.kd_fresh
+
+        aim_x, aim_y = self._compute_aim_point(target=target, predicted=predicted)
+        error_x = aim_x - screen_center[0]
+        error_y = aim_y - screen_center[1]
         error_mag = (error_x * error_x + error_y * error_y) ** 0.5
 
         if error_mag <= self.deadzone_px:
-            self._reset_if_idle(now_ts)
+            self._reset(now_ts)
             return False
 
         dt = self._compute_dt(now_ts)
-        deriv_x = self._clamp((error_x - self._state.last_error_x) / dt, -self.derivative_clip, self.derivative_clip)
-        deriv_y = self._clamp((error_y - self._state.last_error_y) / dt, -self.derivative_clip, self.derivative_clip)
+        deriv_x = self._derivative(error_x, self._state.last_error_x, dt)
+        deriv_y = self._derivative(error_y, self._state.last_error_y, dt)
 
-        predicted = bool(target.get("predicted", False))
-        if predicted:
-            kp = self.kp_predicted
-            kd = self.kd_predicted
-        else:
-            kp = self.kp_fresh
-            kd = self.kd_fresh
+        near_scale = min(1.0, error_mag / self.near_damping_radius_px)
+        if error_mag < self.soft_zone_px:
+            near_scale *= max(0.28, error_mag / max(self.deadzone_px, self.soft_zone_px))
 
-        damping = min(1.0, error_mag / self.near_damping_radius_px)
         stale_factor = 1.0
         if stale_ms > self.caution_stale_ms:
-            stale_factor = max(0.35, 1.0 - ((stale_ms - self.caution_stale_ms) / self.stop_stale_ms))
+            stale_window = max(1.0, self.stop_stale_ms - self.caution_stale_ms)
+            stale_factor = max(0.08, 1.0 - ((stale_ms - self.caution_stale_ms) / stale_window))
 
-        cmd_vx = ((kp * error_x) + (kd * deriv_x)) * self.max_speed_px_s * damping * stale_factor
-        cmd_vy = ((kp * error_y) + (kd * deriv_y)) * self.max_speed_px_s * damping * stale_factor
+        target_vx = ((kp * error_x) + (kd * deriv_x)) * max_speed * near_scale * stale_factor
+        target_vy = ((kp * error_y) + (kd * deriv_y)) * max_speed * near_scale * stale_factor
 
-        cmd_vx = self._rate_limit(self._state.command_vx, cmd_vx, dt)
-        cmd_vy = self._rate_limit(self._state.command_vy, cmd_vy, dt)
+        cmd_vx = self._rate_limit(self._state.command_vx, target_vx, dt)
+        cmd_vy = self._rate_limit(self._state.command_vy, target_vy, dt)
 
         step_x = self._clamp(cmd_vx * dt, -self.max_step_px, self.max_step_px)
         step_y = self._clamp(cmd_vy * dt, -self.max_step_px, self.max_step_px)
@@ -97,14 +102,25 @@ class AimController:
         self._remember(now_ts, error_x, error_y, cmd_vx, cmd_vy)
         return True
 
+    def _compute_aim_point(self, target: dict, predicted: bool) -> tuple[float, float]:
+        center_x = float(target.get("center_x", 0.0))
+        center_y = float(target.get("center_y", 0.0))
+        velocity_x = float(target.get("velocity_x", 0.0))
+        velocity_y = float(target.get("velocity_y", 0.0))
+        lead = self.velocity_lead_gain * (0.45 if predicted else 1.0)
+        return center_x + (velocity_x * lead), center_y + (velocity_y * lead)
+
     def _compute_dt(self, now_ts: float) -> float:
         if self._state.last_time <= 0.0:
             return 1.0 / 60.0
-        return self._clamp(now_ts - self._state.last_time, 1.0 / 240.0, 0.08)
+        return self._clamp(now_ts - self._state.last_time, 1.0 / 300.0, 0.085)
+
+    def _derivative(self, error: float, previous: float, dt: float) -> float:
+        return self._clamp((error - previous) / dt, -self.derivative_clip, self.derivative_clip)
 
     def _rate_limit(self, previous: float, target: float, dt: float) -> float:
-        delta = target - previous
         max_delta = self.max_accel_px_s2 * dt
+        delta = target - previous
         if delta > max_delta:
             return previous + max_delta
         if delta < -max_delta:
@@ -118,7 +134,7 @@ class AimController:
         self._state.command_vx = cmd_vx
         self._state.command_vy = cmd_vy
 
-    def _reset_if_idle(self, now_ts: float | None = None):
+    def _reset(self, now_ts: float | None = None):
         self._state.last_time = time.perf_counter() if now_ts is None else now_ts
         self._state.last_error_x = 0.0
         self._state.last_error_y = 0.0
