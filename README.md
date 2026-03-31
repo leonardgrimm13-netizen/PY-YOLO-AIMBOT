@@ -47,7 +47,7 @@ python start.py
 - Das Modell kann intern mehrere Roh-Detections liefern; visualisiert wird immer genau **ein** aktives Ziel.
 - Im Overlay werden nur aktive Zielbox, Zielmittelpunkt und eine Hilfslinie vom Bildschirmzentrum gezeichnet.
 - Im Status-Log werden Zielstatus, Mittelpunkt, Konfidenz und Auswahlregel ausgegeben.
-- `aim.py` liefert nur optionale Richtungs-/Delta-Berechnungen zur Zielmitte (read-only) und steuert **keine** Eingaben.
+- `aim.py` steuert automatisch relative Mausbewegungen (Windows), sodass der erkannte Zielmittelpunkt zur Bildschirmmitte geführt wird.
 - Bei Gerätefehlern wird automatisch sauber auf CPU zurückgefallen.
 - Wenn Teamfilter nicht passt, muss die Klassenbelegung deines Modells geprüft werden (erwartet: 0=Orange, 1=Blau).
 

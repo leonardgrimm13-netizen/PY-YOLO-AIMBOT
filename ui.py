@@ -31,6 +31,7 @@ from constants import (
     TEAM_TO_CLASSES,
 )
 from detector import DetectorWorker
+from aim import AimController
 from devices import DeviceInfo, list_available_devices, resolve_auto_device, should_use_half
 
 
@@ -48,6 +49,7 @@ class OverlayWindow(QWidget):
         self.last_detect_request = 0.0
         self.detect_interval = 1.0 / max(0.1, DETECT_FPS)
         self.detector_busy = False
+        self.aim_controller = AimController()
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -110,6 +112,14 @@ class OverlayWindow(QWidget):
     @Slot(list)
     def on_detections_ready(self, detections):
         self.detections = detections
+        if not detections:
+            return
+
+        target = detections[0]
+        self.aim_controller.aim_to_screen_center(
+            target_center=(target["center_x"], target["center_y"]),
+            screen_center=self.settings.screen_center,
+        )
 
     @Slot()
     def on_detector_finished(self):
