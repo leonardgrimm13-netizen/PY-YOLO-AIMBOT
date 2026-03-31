@@ -6,6 +6,7 @@ Einfache Desktop-GUI für YOLO-Erkennung mit transparentem Overlay. Fokus: stabi
 ## Voraussetzungen
 - Python 3.10+
 - Windows empfohlen (Multi-Monitor + Overlay getestet auf Windows-Logik)
+- `model.pt` muss **im selben Ordner** wie `1.py`/`main.py` liegen
 - `model.pt` muss **im selben Ordner** wie `start.py`/`main.py` liegen
 
 ## Installation
@@ -17,6 +18,7 @@ pip install -r requirements.txt
 
 ## Start
 ```powershell
+python 1.py
 python start.py
 ```
 (Alternativ: `python main.py`)
@@ -46,7 +48,7 @@ python start.py
 - Das Modell kann intern mehrere Roh-Detections liefern; visualisiert wird immer genau **ein** aktives Ziel.
 - Im Overlay werden nur aktive Zielbox, Zielmittelpunkt und eine Hilfslinie vom Bildschirmzentrum gezeichnet.
 - Im Status-Log werden Zielstatus, Mittelpunkt, Konfidenz und Auswahlregel ausgegeben.
-
+- `aim.py` liefert nur optionale Richtungs-/Delta-Berechnungen zur Zielmitte (read-only) und steuert **keine** Eingaben.
 - Bei Gerätefehlern wird automatisch sauber auf CPU zurückgefallen.
 - Wenn Teamfilter nicht passt, muss die Klassenbelegung deines Modells geprüft werden (erwartet: 0=Orange, 1=Blau).
 
