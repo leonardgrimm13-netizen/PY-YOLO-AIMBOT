@@ -1,7 +1,6 @@
 # PY-YOLO-AIMBOT (GUI Overlay)
 
 Einfache Desktop-GUI für YOLO-Erkennung mit transparentem Overlay. Fokus: stabile Erkennung, klare Bedienung, robuste Geräteauswahl und sauberer Fallback.
-**Wichtig:** Die App sendet keine Eingaben (keine Maus-/Tastaturemulation) und zeigt nur visuelles Single-Target-Tracking.
 
 ## Voraussetzungen
 - Python 3.10+
