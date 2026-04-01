@@ -21,6 +21,12 @@ python start.py
 
 `start.py` bleibt der zentrale Einstiegspunkt und führt **immer zuerst** den Pre-Launch-Updater aus. Erst danach startet die App (`main.main()`).
 
+## Alternative ohne Updater
+```powershell
+python main.py
+```
+`main.py` startet direkt die GUI ohne Repo-Synchronisation. Das ist nützlich für lokales Debugging.
+
 ## Repo-Updater (ohne Manifest)
 Der Updater arbeitet ohne `update_manifest.json` und synchronisiert direkt gegen dieses GitHub-Repository:
 
@@ -70,6 +76,7 @@ Der Updater arbeitet ohne `update_manifest.json` und synchronisiert direkt gegen
 - Im Status-Log werden Zielstatus, Mittelpunkt, Konfidenz und Auswahlregel ausgegeben.
 - `aim.py` steuert automatisch relative Mausbewegungen (Windows), sodass der erkannte Zielmittelpunkt zur Bildschirmmitte geführt wird.
 - Bei Gerätefehlern wird automatisch sauber auf CPU zurückgefallen.
+- Stoppen/Schließen ist robust umgesetzt: Der Detector-Thread wird zuerst sauber beendet, danach werden Overlay und Fenster geschlossen.
 - Wenn Teamfilter nicht passt, muss die Klassenbelegung deines Modells geprüft werden (erwartet: 0=Orange, 1=Blau).
 
 ## Bekannte Limits zur Gerätekompatibilität
