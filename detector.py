@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +35,7 @@ class DetectorWorker(QObject):
         self.fallback_done = False
 
         self._running = False
+        self._stop_event = threading.Event()
         self._latest_packet: FramePacket | None = None
         self._frame_interval = 1.0 / max(1.0, DETECT_FPS)
 
@@ -183,6 +185,7 @@ class DetectorWorker(QObject):
 
     @Slot()
     def run_loop(self):
+        self._stop_event.clear()
         self._running = True
         self._latest_packet = None
 
@@ -190,25 +193,29 @@ class DetectorWorker(QObject):
             self._ensure_ready()
             next_capture_due = time.perf_counter()
 
-            while self._running:
+            while not self._stop_event.is_set():
                 now = time.perf_counter()
                 if now >= next_capture_due:
                     self._capture_latest_frame(now)
+                    if self._stop_event.is_set():
+                        break
                     next_capture_due = now + self._frame_interval
 
                 packet = self._consume_latest_frame()
                 if packet is None:
-                    time.sleep(0.001)
+                    self._stop_event.wait(0.001)
                     continue
 
                 inference_start = time.perf_counter()
                 try:
                     detections = self._parse_results(self._predict_once(packet.frame))
+                    if self._stop_event.is_set():
+                        break
                 except Exception as exc:  # noqa: BLE001
                     if self._handle_detection_error(exc):
                         self._ensure_ready()
                         continue
-                    time.sleep(0.003)
+                    self._stop_event.wait(0.003)
                     continue
 
                 now_done = time.perf_counter()
@@ -229,8 +236,14 @@ class DetectorWorker(QObject):
             self.log_ready.emit(f"Detector-Loop beendet mit Fehler: {exc}")
         finally:
             self._running = False
+            if self.sct is not None:
+                try:
+                    self.sct.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.sct = None
             self.stopped.emit()
 
     @Slot()
     def stop(self):
-        self._running = False
+        self._stop_event.set()
