@@ -246,4 +246,7 @@ class DetectorWorker(QObject):
 
     @Slot()
     def stop(self):
+        if self._stop_event.is_set():
+            return
+        self.log_ready.emit("Detector-Stop angefordert.")
         self._stop_event.set()
