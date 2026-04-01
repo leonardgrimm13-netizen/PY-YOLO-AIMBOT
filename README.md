@@ -5,7 +5,6 @@ Einfache Desktop-GUI für YOLO-Erkennung mit transparentem Overlay. Fokus: stabi
 ## Voraussetzungen
 - Python 3.10+
 - Windows empfohlen (Multi-Monitor + Overlay getestet auf Windows-Logik)
-- `model.pt` muss **im selben Ordner** wie `1.py`/`main.py` liegen
 - `model.pt` muss **im selben Ordner** wie `start.py`/`main.py` liegen
 
 ## Installation
@@ -15,11 +14,34 @@ py -3 -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Start
+## Start (empfohlen)
 ```powershell
 python start.py
 ```
-(Alternativ: `python main.py`)
+
+`start.py` bleibt der zentrale Einstiegspunkt und führt **immer zuerst** den Pre-Launch-Updater aus. Erst danach startet die App (`main.main()`).
+
+## Repo-Updater (ohne Manifest)
+Der Updater arbeitet ohne `update_manifest.json` und synchronisiert direkt gegen dieses GitHub-Repository:
+
+- Owner: `leonardgrimm13-netizen`
+- Repo: `PY-YOLO-AIMBOT`
+- Branch: `main`
+- Primäre Prüfmethode: GitHub Trees API (`recursive=1`)
+
+### Verhalten beim Start
+1. `update.py` lädt den aktuellen Remote-Tree (Dateiliste + Blob-SHAs).
+2. Neue Dateien im Repo werden lokal erstellt.
+3. Geänderte Dateien werden lokal ersetzt (atomar über Temp-Dateien).
+4. Verwaltete Dateien, die im Repo gelöscht wurden, werden lokal ebenfalls gelöscht.
+5. Lokal fehlende/beschädigte verwaltete Dateien werden erneut geladen.
+6. Ist GitHub nicht erreichbar, wird der lokale App-Start **nicht** blockiert.
+
+### Wichtige Sicherheitsregeln
+- Es wird **kein externer Server** und **kein Drittanbieter-Paket** für Updates genutzt.
+- Gelöscht werden nur Dateien, die zuvor als „vom Updater verwaltet“ im lokalen State (`.update_state.json`) erfasst wurden.
+- Nutzerdateien außerhalb der verwalteten Repo-Dateiliste bleiben unberührt.
+- Nach tatsächlich angewendeten Änderungen startet `start.py` den Prozess einmal sauber neu, ohne Endlosschleife.
 
 ## GUI-Optionen
 - **Bildschirm**: Zielmonitor für Overlay
