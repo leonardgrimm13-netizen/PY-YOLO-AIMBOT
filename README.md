@@ -11,7 +11,7 @@ Einfache Desktop-GUI für YOLO-Erkennung mit transparentem Overlay. Fokus: stabi
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-py -m pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
 ## Start (empfohlen)
