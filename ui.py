@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QThread, QTimer, Qt, QRect, Signal, Slot
+from PySide6.QtCore import QThread, QTimer, Qt, QRect, Slot
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -36,7 +36,6 @@ from target_tracker import TargetTracker
 
 
 class OverlayWindow(QWidget):
-    request_stop_detect = Signal()
 
     def __init__(self, settings: AppSettings, log_callback, yolo_cls, mss_mod):
         super().__init__()
@@ -71,10 +70,14 @@ class OverlayWindow(QWidget):
         self.detector = DetectorWorker(settings, yolo_cls=yolo_cls, mss_mod=mss_mod)
         self.detector.moveToThread(self.detector_thread)
         self.detector_thread.started.connect(self.detector.run_loop)
-        self.request_stop_detect.connect(self.detector.stop)
         self.detector.detections_ready.connect(self.on_detections_ready)
         self.detector.log_ready.connect(self.log_callback)
+        self.detector.stopped.connect(self.detector_thread.quit)
+        self.detector_thread.finished.connect(self.detector.deleteLater)
         self.detector_thread.start()
+
+        self._stop_in_progress = False
+        self._stopped = False
 
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -188,23 +191,39 @@ class OverlayWindow(QWidget):
 
         painter.end()
 
-    def stop_overlay(self):
-        self.timer.stop()
-        self.request_stop_detect.emit()
-        self.detector_thread.quit()
-        if not self.detector_thread.wait(3000):
-            self.log_callback("Warnung: Detector-Thread reagiert nicht rechtzeitig beim Stoppen.")
-        self.close()
+    def stop_overlay(self) -> bool:
+        if self._stopped:
+            return True
+        if self._stop_in_progress:
+            return False
 
-    def closeEvent(self, event):  # noqa: N802
+        self._stop_in_progress = True
         try:
             self.timer.stop()
-            self.request_stop_detect.emit()
-            self.detector_thread.quit()
-            self.detector_thread.wait(3000)
-        except Exception:
-            pass
-        super().closeEvent(event)
+            self.detector.stop()
+            if not self.detector_thread.wait(5000):
+                self.log_callback("Warnung: Detector-Thread reagiert nicht rechtzeitig beim Stoppen.")
+                return False
+
+            self._stopped = True
+            self.close()
+            return True
+        finally:
+            self._stop_in_progress = False
+
+    def closeEvent(self, event):  # noqa: N802
+        if self._stopped:
+            super().closeEvent(event)
+            return
+
+        if self._stop_in_progress:
+            event.ignore()
+            return
+
+        if self.stop_overlay():
+            event.accept()
+        else:
+            event.ignore()
 
 
 class MainWindow(QMainWindow):
@@ -389,14 +408,21 @@ class MainWindow(QMainWindow):
         if self.overlay is None:
             return
         try:
-            self.overlay.stop_overlay()
+            stopped = self.overlay.stop_overlay()
         except Exception as exc:  # noqa: BLE001
+            stopped = False
             self.log(f"Stop-Fehler: {exc}")
-        self.overlay = None
-        self.start_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
-        self.log("Overlay gestoppt.")
+
+        if stopped:
+            self.overlay = None
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.log("Overlay gestoppt.")
 
     def closeEvent(self, event):  # noqa: N802
-        self.stop_overlay()
+        if self.overlay is not None:
+            self.stop_overlay()
+            if self.overlay is not None:
+                event.ignore()
+                return
         super().closeEvent(event)
